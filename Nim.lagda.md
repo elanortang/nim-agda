@@ -39,7 +39,7 @@ three = suc two
 ---------------------------------------------------------------------------------------------------
 -- Game Structures
 
--- Our two players are A and B; Player A always goes first
+-- Our two players are A and B
 data Player : Set where
   A B : Player
 
@@ -98,7 +98,7 @@ outcome player (m ∷ ms) board with is_empty board
 ... | true = flip player
 ... | false = outcome (flip player) ms (play m board)
 
--- Predicate defining the game
+-- Predicate defining the game, given a list of moves. Player A goes first.
 p : List Move -> R 
 p ms = value (outcome A ms setup)
 
@@ -141,7 +141,7 @@ epsilonA h = argsup (moves (update_board h setup))
 epsilonB : List Move → (Move → R) → Move
 epsilonB h = arginf (moves (update_board h setup))
 
--- Selection functions for each 
+-- Selection functions for each point in the game
 epsilons : List (List Move → (Move → R) → Move)
 epsilons = eps_helper (sum setup)
   where 
