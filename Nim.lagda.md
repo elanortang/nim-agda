@@ -17,12 +17,13 @@ open import Data.Nat as ℕ
 open import Data.Nat.Properties
 
 -- List
-open import Data.List as List using (List; []; _∷_; _++_; [_]; foldr; _∷ʳ_)
+open import Data.List as List using (List; []; _∷_; _++_; drop; length; head)
 -- import Data.List.Properties as List
+open import Data.Maybe.Base as Maybe
 
 -- Vec
-open import Data.Vec.Functional as Vec
-open import Data.Fin.Base
+open import Data.Vec.Functional as Vec using (Vector; []; _∷_; foldr; updateAt; length)
+open import Data.Fin.Base hiding (_+_)
 
 -- _≡_
 open import Relation.Binary.PropositionalEquality as Eq using (_≡_; module ≡-Reasoning)
@@ -34,17 +35,24 @@ isPos zero = ⊥
 isPos _    = ⊤
 
 data Pos : Set where
-  pos_one : Pos
-  pos_suc : Pos → Pos
+  one : Pos
+  succ : Pos → Pos
 
 toPos : ∀ n {_ : isPos n} → Pos
 toPos  0 {()}
-toPos  1            = pos_one
-toPos (suc (suc n)) = pos_suc (toPos (suc n))
+toPos  1            = one
+toPos (suc (suc n)) = succ (toPos (suc n))
 
 toNat : Pos → ℕ 
-toNat pos_one = suc zero
-toNat (pos_suc n) = suc (toNat n)
+toNat one = suc zero
+toNat (succ n) = suc (toNat n)
+
+---------------------------------------------------------------------------------------------------
+-- Selecton Function Structures
+-- varable a : Agda.Primitive.Level
+
+-- J : (X : Set lzero) → (R : Set lzero) → Set
+-- J x r = {! f x !}
 
 ---------------------------------------------------------------------------------------------------
 -- Game Structures
@@ -80,7 +88,7 @@ setup = 1 Vec.∷ 2 Vec.∷ 3 Vec.∷ Vec.[]
 
 -- Check if all entries are 0
 is_empty : Board → Bool
-is_empty board = Vec.foldr (λ n b → b ∧ (n ≡ᵇ 0)) true board
+is_empty board = foldr (λ n b → b ∧ (n ≡ᵇ 0)) true board
 
 -- Remove n items from the ith pile
 -- Note: n must be > 0
@@ -108,6 +116,15 @@ outcome player (m ∷ ms) board with is_empty board
 ... | true = flip player
 ... | false = outcome (flip player) ms (play m board)
 
+-- Variant where players win if they do not take the last item
+outcome' : Player → List Move → Board → Player
+outcome' player [] board with is_empty board 
+... | true = player 
+... | false = flip player    -- ERROR CASE: Should not run out of moves to play when the board is non-empty
+outcome' player (m ∷ ms) board with is_empty board 
+... | true = player
+... | false = outcome' (flip player) ms (play m board)
+
 -- Predicate defining the game, given a list of moves. Player A goes first.
 p : List Move -> R 
 p ms = value (outcome A ms setup)
@@ -117,7 +134,7 @@ p ms = value (outcome A ms setup)
 
 -- The sum of the setup numbers gives the maximum moves needed to finish the game
 sum : Board → ℕ 
-sum = Vec.foldr (λ n acc → n ℕ.+ acc) zero
+sum = foldr (λ n acc → n + acc) zero
 
 -- Give the new state of the board, given the moves which already happened and the current board state
 update_board : List Move -> Board -> Board
@@ -132,16 +149,16 @@ pile_moves i (suc n) = (i , toPos (suc n)) List.∷ (pile_moves i n)
 -- Enumerates all possible moves for removing from the first i piles, provided that i ≤ NumPiles
 moves_helper : Board → (i : ℕ) → i ℕ.≤ NumPiles → List Move
 moves_helper board zero _ = List.[]
-moves_helper board (suc i) p = (pile_moves (fromℕ< p) (board (fromℕ< p))) List.++ (moves_helper board i (<⇒≤ p))
+moves_helper board (suc i) p = (pile_moves (fromℕ< p) (board (fromℕ< p))) ++ (moves_helper board i (<⇒≤ p))
 
 -- Enumerate all possible moves, given the current state of the board
 moves : Board → List Move 
-moves board = moves_helper board (length board) (≤-reflexive Eq.refl)
+moves board = moves_helper board (Vec.length board) (≤-reflexive Eq.refl)
   
 -- Chooses a move that maximizes the value
 argsup : List Move → (Move → R) → Move
 -- ERROR: Should never reach an empty list, since we have a base case when there is one remaining element
-argsup List.[] p = zero , pos_one  
+argsup List.[] p = zero , one  
 argsup (x List.∷ ms) p with p x 
 ... | true = x
 argsup (x List.∷ List.[]) p | false = x
@@ -149,12 +166,13 @@ argsup (x List.∷ x₁ List.∷ ms) p | false = argsup (x₁ List.∷ ms) p
 
 -- Chooses a move that minimizes the value
 arginf : List Move → (Move → R) → Move
+arginf ms p = argsup ms (λ m → not (p m))
 -- ERROR: Should never reach an empty list, since we have a base case when there is one remaining element
-arginf List.[] p = zero , pos_one  
-arginf (x List.∷ ms) p with p x 
-... | false = x
-arginf (x List.∷ List.[]) p | true = x
-arginf (x List.∷ x₁ List.∷ ms) p | true = argsup (x₁ List.∷ ms) p
+-- arginf List.[] p = zero , succ one  
+-- arginf (x List.∷ ms) p with p x 
+-- ... | false = x
+-- arginf (x List.∷ List.[]) p | true = x
+-- arginf (x List.∷ x₁ List.∷ ms) p | true = argsup (x₁ List.∷ ms) p
 
 -- Optimal move for player A
 epsilonA : List Move → (Move → R) → Move
@@ -179,17 +197,60 @@ epsilons = eps_helper (sum setup)
 
 ---------------------------------------------------------------------------------------------------
 -- Gameplay Optimization
--- The following are pulled directly from section 4.3 in the paper. 
--- The implementation should be the same as for tic-tac-toe.
+-- Converted from sections 4.2 and 4.3 in the paper
+
+overline : {X : Set} → ((X → R) → X) → (X → R) → R 
+overline e p = p (e p)
+
+otimes : ((Move → R) → Move) → (Move → (List Move → R) → List Move) → (List Move → R) → List Move
+otimes e0 e1 p = a0 List.∷ a1
+  where 
+    a0 : Move
+    a0 = e0 (λ x0 → overline (e1 x0) (λ x1 → p (x0 List.∷ x1)))
+
+    a1 : List Move
+    a1 = e1 a0 (λ x1 → p (a0 List.∷ x1))
+
+{-# TERMINATING #-}
+bigotimes : List (List Move → (Move → R) → Move) → (List Move → R) → List Move
+bigotimes List.[] = λ p → List.[]
+bigotimes (e List.∷ es) = otimes (e List.[]) (λ x → bigotimes (construct es x))
+  where 
+    construct : List (List Move → (Move → R) → Move) → Move → List (List Move → (Move → R) → Move)
+    construct List.[] x = List.[]
+    construct (d List.∷ es) x = (λ xs → d (x List.∷ xs)) List.∷ (construct es x)
 
 optimalPlay : List Move 
-optimalPlay = {! bigotimes (epsilons p) !}
--- See the end of 4.2 for how bigotimes will be implemented
+optimalPlay = bigotimes epsilons p
 
 optimalOutcome : R
 optimalOutcome = p optimalPlay
 
-optimalStrategy : List Move → Move
-optimalStrategy ms = {!  !}
--- See 4.3 for how it will be implemented
-```  
+optimalStrategy : List Move → Maybe Move
+optimalStrategy ms = head (bigotimes epsilons' p')
+  where 
+    epsilons' : List (List Move → (Move → R) → Move)
+    epsilons' = drop (List.length ms) epsilons
+
+    p' : List Move → R
+    p' xs = p (ms ++ xs)
+
+---------------------------------------------------------------------------------------------------
+-- Testing
+
+-- Setup [1, 2, 3]. We expect B to win and the result to be false, since this starts in a safe configuration. 
+test123_Outcome : R
+test123_Outcome = {! optimalOutcome !}
+-- NORMALIZE THIS
+
+test123_Play : List Move
+test123_Play = {! optimalPlay !}
+-- NORMALIZE THIS
+
+test123_Strategy : Maybe Move
+test123_Strategy = {! optimalStrategy List.[] !}
+
+-- Setup [3, 5, 7]. We expect A to win, since this starts in a unsafe configuration. 
+
+-- Q: what would be considered a reasonable number of tests?
+```   
